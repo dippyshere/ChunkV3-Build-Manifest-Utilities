@@ -18,17 +18,21 @@ import aiofiles
 import asyncio
 import logging
 import argparse
-import concurrent.futures
 import time
 
 from shutil import copyfileobj
 
 
-def get_args():
-    parser = argparse.ArgumentParser(description='Download files from Build Manifests.')
+def get_args() -> argparse.Namespace:
+    """
+    Gets the command line arguments.
+    :return: argparse.Namespace - the command line arguments
+    """
+    parser: argparse.ArgumentParser = argparse.ArgumentParser(description='Download files from Build Manifests.')
     parser.add_argument('file', type=str, help='Text file containing file info.')
     parser.add_argument('-d', '--dir', type=str, help='Directory to save files to.')
-    parser.add_argument('-b', '--base', type=str, default='https://battlebreakers-live-cdn.ol.epicgames.com', help='Base URL to download from.')
+    parser.add_argument('-b', '--base', type=str, default='https://battlebreakers-live-cdn.ol.epicgames.com',
+                        help='Base URL to download from.')
     parser.add_argument('-v', '--verbose', action='store_true', default=True, help='Enable verbose logging.')
     parser.add_argument('-t', '--threads', type=int, default=3, help='Number of threads to use.')
     parser.add_argument('-s', '--skip', action='store_true', default=True, help='Skip files that already exist.')
@@ -38,26 +42,51 @@ def get_args():
     return parser.parse_args()
 
 
-async def get_file_info(path):
+async def get_file_info(path: str) -> tuple[str, int, list]:
+    """
+    Reads and parses the build manifest file.
+    :param path: str - the path to the file
+    :return: str, int, list - the build id, number of entries, and entries
+    """
     async with aiofiles.open(path, 'r') as f:
-        lines = await f.readlines()
-    build_id = lines[0].split('=')[1].strip()
-    num_entries = int(lines[1].split('=')[1].strip())
-    entries = []
+        lines: list[str] = await f.readlines()
+    build_id: str = lines[0].split('=')[1].strip()
+    num_entries: int = int(lines[1].split('=')[1].strip())
+    entries: list = []
     for line in lines[2:]:
         entries.append(re.split(r'\t+', line.strip()))
     return build_id, num_entries, entries
 
 
-async def download(session, url, path):
+async def download(session: aiohttp.client.ClientSession, url, path) -> None:
+    """
+    Downloads a file and saves to disk.
+    :param session: The aiohttp session
+    :param url: The url to download from
+    :param path: The path to save the file to
+    :return: None
+    """
     async with session.get(url) as response:
         response.raise_for_status()
         async with aiofiles.open(path, 'wb') as f:
             await f.write(await response.read())
 
 
-async def download_file(url, path, retries, wait, verbose, build_id, base, session):
-    url = f'{base}/{build_id}/{url}'
+async def download_file(url: str, path: str, retries: int, wait: int | float, verbose: bool, build_id: str, base: str,
+                        session: aiohttp.client.ClientSession) -> None:
+    """
+    Constructs the url and downloads the file to disk.
+    :param url: The path to download from
+    :param path: The path to download from
+    :param retries: How many times to retry the download
+    :param wait: How long to wait between retries
+    :param verbose: Whether to log verbose messages
+    :param build_id: The build id for the url
+    :param base: The base url to download from
+    :param session: The aiohttp session
+    :return: None
+    """
+    url: str = f'{base}/{build_id}/{url}'
     if os.path.exists(path):
         os.remove(path)
     logging.info('Downloading %s to %s', url, path)
@@ -74,34 +103,48 @@ async def download_file(url, path, retries, wait, verbose, build_id, base, sessi
             time.sleep(wait)
 
 
-async def check_file(path, sha1):
+async def check_file(path: str, sha1: str) -> bool:
+    """
+    Checks if a file exists and has the correct sha1 hash.
+    :param path: The path to the file
+    :param sha1: The sha1 hash to check against
+    :return: bool - whether the file exists and has the correct sha1 hash
+    """
     if not os.path.exists(path):
         return False
-    async with open(path, 'rb') as f:
-        data = await f.read()
+    with open(path, 'rb') as f:
+        data: bytes = f.read()
     return hashlib.sha1(data).hexdigest() == sha1
 
 
-async def main():
-    args = get_args()
+async def main() -> None:
+    """
+    Main function.
+    :return: None
+    """
+    args: argparse.Namespace = get_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
     build_id, num_entries, entries = await get_file_info(args.file)
     if args.dir:
         os.chdir(args.dir)
+    else:
+        os.chdir("D:/Battle Breakers/")
     if not os.path.exists(build_id):
         os.mkdir(build_id)
     os.chdir(build_id)
     if not os.path.exists(entries[0][4].split('/')[0]):
         os.mkdir(entries[0][4].split('/')[0])
-    session = aiohttp.ClientSession()
-    tasks = []
+    session: aiohttp.client.ClientSession = aiohttp.ClientSession()
+    tasks: list = []
     for entry in entries:
-        path = entry[4]
+        path: str = entry[4]
         if args.skip and os.path.exists(path):
             continue
         if args.check and await check_file(path, entry[2].split(':')[1]):
             continue
-        tasks.append(asyncio.create_task(download_file(path, path, args.retries, args.wait, args.verbose, build_id, args.base, session)))
+        tasks.append(asyncio.create_task(
+            download_file(path, path, args.retries, args.wait, args.verbose, build_id, args.base, session))
+        )
     await asyncio.gather(*tasks)
     await session.close()
 
